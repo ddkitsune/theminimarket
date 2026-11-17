@@ -32,8 +32,9 @@
       }
     ],
     "win": {
+      "signAndEditExecutable": false,
       "target": [
-        "portable"
+        "dir"
       ]
     },
     "portable": {
