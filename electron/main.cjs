@@ -99,6 +99,16 @@ ipcMain.handle('pos:backup-database', async (_, folder) => dbOps.backupDatabase(
 // IPC Handlers - Reportes
 ipcMain.handle('pos:get-sales-report', async () => dbOps.getSalesReport());
 
+// IPC Handlers - Importar / Exportar Excel
+ipcMain.handle('pos:export-products', async () => dbOps.getAllProductsForExport());
+ipcMain.handle('pos:import-products', async (_, productsList) => dbOps.importProducts(productsList));
+
+// IPC Handlers - Usuarios y Empleados
+ipcMain.handle('pos:get-users', async () => dbOps.getUsers());
+ipcMain.handle('pos:save-user', async (_, userData) => dbOps.saveUser(userData));
+ipcMain.handle('pos:delete-user', async (_, id) => dbOps.deleteUser(id));
+ipcMain.handle('pos:login-user', async (_, term) => dbOps.loginUser(term));
+
 app.whenReady().then(async () => {
   try {
     await dbOps.initDatabase();

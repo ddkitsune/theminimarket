@@ -10,7 +10,9 @@ export function generateReceiptHtml(saleData) {
     pagoCon,
     cambio,
     metodoPago = 'efectivo',
-    cajero = 'DAVID ENRIQUE GONZALEZ',
+    referencia = '',
+    clienteNombre = '',
+    cajero = 'ADMINISTRADOR',
     negocio = {}
   } = saleData;
 
@@ -105,8 +107,20 @@ export function generateReceiptHtml(saleData) {
           </tr>
           <tr>
             <td>Método:</td>
-            <td class="text-right uppercase">${metodoPago}</td>
+            <td class="text-right uppercase">${metodoPago.replace('_', ' ')}</td>
           </tr>
+          ${referencia ? `
+          <tr>
+            <td>Referencia:</td>
+            <td class="text-right bold">${referencia}</td>
+          </tr>
+          ` : ''}
+          ${clienteNombre ? `
+          <tr>
+            <td>Cliente:</td>
+            <td class="text-right bold">${clienteNombre}</td>
+          </tr>
+          ` : ''}
           ${cambioUsd > 0 ? `
           <tr>
             <td>Cambio USD:</td>

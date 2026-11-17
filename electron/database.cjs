@@ -6,6 +6,7 @@ class SQLiteWrapper {
   constructor(dbPath, sqlInstance) {
     this.dbPath = dbPath;
     this.SQL = sqlInstance;
+    this.inTransaction = 0;
     if (fs.existsSync(dbPath)) {
       this.db = new this.SQL.Database(fs.readFileSync(dbPath));
     } else {
@@ -14,6 +15,7 @@ class SQLiteWrapper {
   }
 
   save() {
+    if (this.inTransaction > 0) return;
     try {
       const data = this.db.export();
       fs.writeFileSync(this.dbPath, Buffer.from(data));
@@ -36,11 +38,13 @@ class SQLiteWrapper {
 
   prepare(sql) {
     const self = this;
+    const sanitize = (args) => args.map(p => p === undefined ? null : p);
     return {
       get(...params) {
         const stmt = self.db.prepare(sql);
         try {
-          if (params.length > 0) stmt.bind(params);
+          const clean = sanitize(params);
+          if (clean.length > 0) stmt.bind(clean);
           if (stmt.step()) {
             return stmt.getAsObject();
           }
@@ -53,7 +57,8 @@ class SQLiteWrapper {
         const stmt = self.db.prepare(sql);
         const results = [];
         try {
-          if (params.length > 0) stmt.bind(params);
+          const clean = sanitize(params);
+          if (clean.length > 0) stmt.bind(clean);
           while (stmt.step()) {
             results.push(stmt.getAsObject());
           }
@@ -65,7 +70,8 @@ class SQLiteWrapper {
       run(...params) {
         const stmt = self.db.prepare(sql);
         try {
-          if (params.length > 0) stmt.bind(params);
+          const clean = sanitize(params);
+          if (clean.length > 0) stmt.bind(clean);
           stmt.step();
         } finally {
           stmt.free();
@@ -90,14 +96,19 @@ class SQLiteWrapper {
   transaction(fn) {
     const self = this;
     return (...args) => {
+      self.inTransaction = (self.inTransaction || 0) + 1;
       self.db.run('BEGIN TRANSACTION;');
       try {
         const result = fn(...args);
         self.db.run('COMMIT;');
-        self.save();
+        self.inTransaction--;
+        if (self.inTransaction === 0) {
+          self.save();
+        }
         return result;
       } catch (err) {
         self.db.run('ROLLBACK;');
+        self.inTransaction--;
         throw err;
       }
     };
@@ -362,7 +373,16 @@ function getCashMovements(turnoId) {
 // 8. Transacción de Venta
 function completeSale(saleData) {
   const tx = getDb().transaction((data) => {
-    const { turnoId, clienteId, userId = 1, items, pagoCon, metodoPago = 'efectivo', descuento = 0.0 } = data;
+    const { 
+      turnoId, 
+      clienteId, 
+      userId = 1, 
+      items, 
+      pagoCon, 
+      metodoPago = 'efectivo', 
+      descuento = 0.0,
+      referencia = ''
+    } = data;
 
     let totalArticulos = 0;
     let subtotal = 0;
@@ -429,14 +449,16 @@ function completeSale(saleData) {
       }
     }
 
-    getDb().prepare(`
-      INSERT INTO venta_pagos (venta_id, metodo, monto)
-      VALUES (?, ?, ?)
-    `).run(ventaId, metodoPago, total);
+    const refVal = referencia ? String(referencia).trim() : null;
 
-    if (metodoPago === 'efectivo') {
+    getDb().prepare(`
+      INSERT INTO venta_pagos (venta_id, metodo, monto, referencia)
+      VALUES (?, ?, ?, ?)
+    `).run(ventaId, metodoPago, total, refVal);
+
+    if (['efectivo', 'usd_efectivo', 'bs_efectivo'].includes(metodoPago)) {
       getDb().prepare("UPDATE turnos_caja SET total_ventas_efectivo = total_ventas_efectivo + ? WHERE id = ?").run(total, turnoId);
-    } else if (metodoPago === 'tarjeta') {
+    } else if (['tarjeta', 'punto_venta'].includes(metodoPago)) {
       getDb().prepare("UPDATE turnos_caja SET total_ventas_tarjeta = total_ventas_tarjeta + ? WHERE id = ?").run(total, turnoId);
     } else if (metodoPago === 'credito') {
       getDb().prepare("UPDATE turnos_caja SET total_ventas_credito = total_ventas_credito + ? WHERE id = ?").run(total, turnoId);
@@ -447,7 +469,7 @@ function completeSale(saleData) {
           VALUES (?, 'cargo', ?, (SELECT saldo_actual - ? FROM clientes WHERE id = ?), (SELECT saldo_actual FROM clientes WHERE id = ?), ?, 'Cargo por venta Ticket #' || ?)
         `).run(clienteId, total, total, clienteId, clienteId, ventaId, folio);
       }
-    } else if (metodoPago === 'transferencia') {
+    } else if (['transferencia', 'pago_movil'].includes(metodoPago)) {
       getDb().prepare("UPDATE turnos_caja SET total_ventas_transferencia = total_ventas_transferencia + ? WHERE id = ?").run(total, turnoId);
     }
 
@@ -717,6 +739,165 @@ function backupDatabase(targetFolder = null) {
   };
 }
 
+// 15. Exportación e Importación de Inventario (Excel / CSV)
+function getAllProductsForExport() {
+  const query = `
+    SELECT 
+      p.codigo AS "Código",
+      p.producto AS "Producto",
+      p.precio_costo AS "P. Costo",
+      p.precio_venta AS "P. Venta",
+      p.precio_mayoreo AS "P. Mayoreo",
+      p.existencia AS "Existencia",
+      p.inv_minimo AS "Inv. Mínimo",
+      p.inv_maximo AS "Inv. Máximo",
+      COALESCE(d.nombre, 'VIVERES EN GENERAL') AS "Departamento"
+    FROM productos p
+    LEFT JOIN departamentos d ON p.departamento_id = d.id
+    WHERE p.activo = 1
+    ORDER BY d.nombre, p.producto ASC
+  `;
+  return getDb().prepare(query).all();
+}
+
+function importProducts(productsList) {
+  if (!Array.isArray(productsList) || productsList.length === 0) {
+    throw new Error("No se proporcionaron productos válidos para importar.");
+  }
+
+  function parseNum(val) {
+    if (val === undefined || val === null || val === '') return 0;
+    if (typeof val === 'number') return isNaN(val) ? 0 : val;
+    const clean = String(val).replace(/[$€Bs.\s]/g, '').replace(',', '.');
+    const n = parseFloat(clean);
+    return isNaN(n) ? 0 : n;
+  }
+
+  const tx = getDb().transaction((rows) => {
+    let inserted = 0;
+    let updated = 0;
+
+    for (const row of rows) {
+      const rawCode = row['Código'] || row['Codigo'] || row['codigo'] || row['CODIGO'] || row['code'] || '';
+      const codigo = String(rawCode).trim();
+      if (!codigo) continue;
+
+      const rawProd = row['Producto'] || row['producto'] || row['PRODUCTO'] || row['Descripción'] || row['Descripcion'] || row['nombre'] || '';
+      const producto = String(rawProd).trim() || 'PRODUCTO ' + codigo;
+
+      const precioCosto = parseNum(row['P. Costo'] || row['P.Costo'] || row['Precio Costo'] || row['costo'] || 0);
+      const precioVenta = parseNum(row['P. Venta'] || row['P.Venta'] || row['Precio Venta'] || row['precio'] || 0);
+      const precioMayoreo = parseNum(row['P. Mayoreo'] || row['P.Mayoreo'] || row['Precio Mayoreo'] || 0);
+      const existencia = parseNum(row['Existencia'] || row['existencia'] || row['Stock'] || row['stock'] || 0);
+      const invMinimo = parseNum(row['Inv. Mínimo'] || row['Inv. Minimo'] || row['inv_minimo'] || 0);
+      const invMaximo = parseNum(row['Inv. Máximo'] || row['Inv. Maximo'] || row['inv_maximo'] || 0);
+
+      const deptoName = String(row['Departamento'] || row['departamento'] || row['DEPARTAMENTO'] || row['Categoría'] || 'VIVERES EN GENERAL').trim().toUpperCase();
+
+      let depto = getDb().prepare("SELECT id FROM departamentos WHERE UPPER(nombre) = ?").get(deptoName);
+      if (!depto) {
+        getDb().prepare("INSERT OR IGNORE INTO departamentos (nombre) VALUES (?)").run(deptoName);
+        depto = getDb().prepare("SELECT id FROM departamentos WHERE UPPER(nombre) = ?").get(deptoName);
+      }
+      const deptoId = depto ? depto.id : null;
+
+      const gananciaPct = precioCosto > 0 && precioVenta > precioCosto 
+        ? ((precioVenta - precioCosto) / precioCosto) * 100 
+        : 0;
+
+      const existing = getDb().prepare("SELECT id FROM productos WHERE codigo = ?").get(codigo);
+
+      if (existing) {
+        getDb().prepare(`
+          UPDATE productos SET
+            producto = ?,
+            precio_costo = ?,
+            ganancia_porcentaje = ?,
+            precio_venta = ?,
+            precio_mayoreo = ?,
+            existencia = ?,
+            inv_minimo = ?,
+            inv_maximo = ?,
+            departamento_id = ?,
+            activo = 1,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(
+          producto, precioCosto, gananciaPct, precioVenta, precioMayoreo,
+          existencia, invMinimo, invMaximo, deptoId, existing.id
+        );
+        updated++;
+      } else {
+        getDb().prepare(`
+          INSERT INTO productos (
+            codigo, producto, tipo_venta, precio_costo, ganancia_porcentaje,
+            precio_venta, precio_mayoreo, existencia, inv_minimo, inv_maximo,
+            departamento_id, unidad_medida, usa_inventario, activo
+          ) VALUES (?, ?, 'unidad', ?, ?, ?, ?, ?, ?, ?, ?, 'PZA', 1, 1)
+        `).run(
+          codigo, producto, precioCosto, gananciaPct, precioVenta, precioMayoreo,
+          existencia, invMinimo, invMaximo, deptoId
+        );
+        inserted++;
+      }
+    }
+
+    return { success: true, total: rows.length, inserted, updated };
+  });
+
+  return tx(productsList);
+}
+
+// 16. Gestión de Usuarios y Cajeros
+function getUsers() {
+  return getDb().prepare("SELECT id, nombre, usuario, pin, rol, activo, created_at FROM usuarios ORDER BY id ASC").all();
+}
+
+function saveUser(userData) {
+  const { id, nombre, usuario, pin, rol = 'cajero', activo = 1 } = userData;
+  if (!nombre || !nombre.trim()) throw new Error("El nombre es requerido.");
+  if (!usuario || !usuario.trim()) throw new Error("El nombre de usuario es requerido.");
+
+  const cleanNombre = nombre.trim().toUpperCase();
+  const cleanUsuario = usuario.trim().toLowerCase();
+  const cleanPin = pin ? String(pin).trim() : '1234';
+
+  if (id) {
+    getDb().prepare(`
+      UPDATE usuarios 
+      SET nombre = ?, usuario = ?, pin = ?, rol = ?, activo = ?
+      WHERE id = ?
+    `).run(cleanNombre, cleanUsuario, cleanPin, rol, activo ? 1 : 0, id);
+    return getDb().prepare("SELECT id, nombre, usuario, pin, rol, activo, created_at FROM usuarios WHERE id = ?").get(id);
+  } else {
+    const dup = getDb().prepare("SELECT id FROM usuarios WHERE usuario = ?").get(cleanUsuario);
+    if (dup) throw new Error(`El usuario '${cleanUsuario}' ya está registrado.`);
+
+    const info = getDb().prepare(`
+      INSERT INTO usuarios (nombre, usuario, pin, rol, activo)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(cleanNombre, cleanUsuario, cleanPin, rol, activo ? 1 : 0);
+    return getDb().prepare("SELECT id, nombre, usuario, pin, rol, activo, created_at FROM usuarios WHERE id = ?").get(info.lastInsertRowid);
+  }
+}
+
+function deleteUser(id) {
+  if (parseInt(id) === 1) {
+    throw new Error("No se puede eliminar el usuario administrador principal.");
+  }
+  return getDb().prepare("UPDATE usuarios SET activo = 0 WHERE id = ?").run(id);
+}
+
+function loginUser(pinOrUser) {
+  const term = String(pinOrUser).trim();
+  const user = getDb().prepare(`
+    SELECT id, nombre, usuario, rol, activo 
+    FROM usuarios 
+    WHERE (pin = ? OR usuario = ?) AND activo = 1
+  `).get(term, term.toLowerCase());
+  return user || null;
+}
+
 module.exports = {
   initDatabase,
   getDb,
@@ -743,5 +924,11 @@ module.exports = {
   setExchangeRate,
   getLastSale,
   getSettings,
-  backupDatabase
+  backupDatabase,
+  getAllProductsForExport,
+  importProducts,
+  getUsers,
+  saveUser,
+  deleteUser,
+  loginUser
 };

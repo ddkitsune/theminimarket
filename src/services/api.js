@@ -109,5 +109,27 @@ export const posApi = {
   getSalesReport: async () => {
     if (isElectron) return await window.api.getSalesReport();
     return { totales: { total_ventas: 0, monto_total: 0, ganancia_total: 0 }, ventasPorDia: [], ventasPorDepto: [] };
+  },
+
+  // Importar / Exportar Excel
+  exportProducts: async () => {
+    return isElectron ? await window.api.exportProducts() : [];
+  },
+  importProducts: async (productsList) => {
+    return isElectron ? await window.api.importProducts(productsList) : { success: true, count: productsList.length, inserted: productsList.length, updated: 0 };
+  },
+
+  // Usuarios y Cajeros
+  getUsers: async () => {
+    return isElectron ? await window.api.getUsers() : [{ id: 1, nombre: 'ADMINISTRADOR', usuario: 'admin', rol: 'admin', activo: 1 }];
+  },
+  saveUser: async (userData) => {
+    return isElectron ? await window.api.saveUser(userData) : { success: true };
+  },
+  deleteUser: async (id) => {
+    return isElectron ? await window.api.deleteUser(id) : { success: true };
+  },
+  loginUser: async (term) => {
+    return isElectron ? await window.api.loginUser(term) : { id: 1, nombre: 'ADMINISTRADOR', usuario: 'admin', rol: 'admin' };
   }
 };

@@ -19,10 +19,11 @@ import {
 export default function Header({ 
   activeTab, 
   setActiveTab, 
-  cashierName = "DAVID ENRIQUE GONZALEZ", 
+  cashierName = "ADMINISTRADOR", 
   onOpenCorte,
   exchangeRate,
-  onOpenTasaModal
+  onOpenTasaModal,
+  onSwitchUser
 }) {
   const tabs = [
     { id: 'ventas', label: 'F1 Ventas', icon: ShoppingCart, keyHint: 'F1' },
@@ -79,12 +80,18 @@ export default function Header({
         </div>
 
         <div className="flex items-center space-x-4">
-          <div className="text-right">
-            <div className="text-[10px] text-gray-500 uppercase font-semibold">Le atiende:</div>
-            <div className="text-xs font-bold text-gray-800 uppercase tracking-wide">
-              {cashierName}
+          <button
+            onClick={onSwitchUser}
+            title="Haz clic para cambiar de empleado / cajero con PIN"
+            className="text-right p-1 rounded hover:bg-gray-100 transition cursor-pointer group"
+          >
+            <div className="text-[10px] text-gray-500 uppercase font-semibold group-hover:text-blue-700">
+              Le atiende (Cambiar):
             </div>
-          </div>
+            <div className="text-xs font-bold text-gray-800 uppercase tracking-wide group-hover:text-blue-900 flex items-center justify-end space-x-1">
+              <span>{cashierName}</span>
+            </div>
+          </button>
 
           <div className="flex items-center space-x-1.5">
             <button 

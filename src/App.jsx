@@ -15,6 +15,7 @@ import VerificadorModal from './components/modals/VerificadorModal';
 import MovimientoCajaModal from './components/modals/MovimientoCajaModal';
 import CorteModal from './components/modals/CorteModal';
 import TasaCambioModal from './components/modals/TasaCambioModal';
+import CambiarCajeroModal from './components/modals/CambiarCajeroModal';
 
 import { posApi } from './services/api';
 import { generateReceiptHtml } from './services/ticketPrinter';
@@ -23,6 +24,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('ventas');
   const [turno, setTurno] = useState(null);
   const [exchangeRate, setExchangeRate] = useState(55.00);
+  const [currentUser, setCurrentUser] = useState({ id: 1, nombre: 'ADMINISTRADOR', usuario: 'admin', rol: 'admin' });
 
   // Estado de los tickets de venta
   const [tickets, setTickets] = useState([
@@ -38,6 +40,7 @@ export default function App() {
   const [movimientoTipo, setMovimientoTipo] = useState('entrada');
   const [isCorteOpen, setIsCorteOpen] = useState(false);
   const [isTasaModalOpen, setIsTasaModalOpen] = useState(false);
+  const [isSwitchUserOpen, setIsSwitchUserOpen] = useState(false);
 
   // Iniciar turno y tasa de cambio al arrancar
   useEffect(() => {
@@ -95,17 +98,19 @@ export default function App() {
   }, [tickets, activeTicketIndex]);
 
   // Completar Venta e Imprimir Ticket
-  const handleConfirmSale = async ({ metodoPago, pagoCon, cambio, tasaCambio }) => {
+  const handleConfirmSale = async ({ metodoPago, pagoCon, cambio, tasaCambio, referencia, clienteId, clienteNombre }) => {
     const current = tickets[activeTicketIndex];
     if (!current || current.items.length === 0) return;
 
     try {
       const res = await posApi.completeSale({
         turnoId: turno?.id || 1,
-        clienteId: current.cliente?.id || null,
+        clienteId: clienteId || current.cliente?.id || null,
         items: current.items,
         pagoCon,
-        metodoPago
+        metodoPago,
+        referencia: referencia || '',
+        userId: currentUser?.id || 1
       });
 
       // Generar e imprimir ticket térmico
@@ -116,7 +121,10 @@ export default function App() {
         tasaCambio: tasaCambio || exchangeRate,
         pagoCon,
         cambio: res.cambio,
-        metodoPago
+        metodoPago,
+        referencia: referencia || '',
+        clienteNombre: clienteNombre || (current.cliente ? `${current.cliente.nombres} ${current.cliente.apellidos || ''}` : ''),
+        cajero: currentUser?.nombre || 'ADMINISTRADOR'
       });
 
       posApi.printTicket(ticketHtml);
@@ -196,13 +204,15 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-100 font-sans">
-      {/* Header eleventa con Tasa del Día */}
+      {/* Header eleventa con Tasa del Día y Usuario Activo */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onOpenCorte={() => setIsCorteOpen(true)}
         exchangeRate={exchangeRate}
         onOpenTasaModal={() => setIsTasaModalOpen(true)}
+        cashierName={currentUser?.nombre || "ADMINISTRADOR"}
+        onSwitchUser={() => setIsSwitchUserOpen(true)}
       />
 
       {/* Pantalla Activa */}
@@ -291,6 +301,13 @@ export default function App() {
         isOpen={isCorteOpen}
         onClose={() => setIsCorteOpen(false)}
         turnoId={turno?.id || 1}
+      />
+
+      <CambiarCajeroModal
+        isOpen={isSwitchUserOpen}
+        onClose={() => setIsSwitchUserOpen(false)}
+        currentUser={currentUser}
+        onSelectUser={(user) => setCurrentUser(user)}
       />
     </div>
   );

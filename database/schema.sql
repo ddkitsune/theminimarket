@@ -172,13 +172,14 @@ CREATE TABLE IF NOT EXISTS venta_detalles (
     FOREIGN KEY (producto_id) REFERENCES productos(id)
 );
 
--- 10. Pagos Mixtos por Venta
+-- 10. Pagos por Venta (Soporta bimoneda y métodos venezolanos)
 CREATE TABLE IF NOT EXISTS venta_pagos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     venta_id INTEGER NOT NULL,
-    metodo TEXT NOT NULL CHECK (metodo IN ('efectivo', 'tarjeta', 'credito', 'transferencia', 'vales', 'cheque')),
+    metodo TEXT NOT NULL,
     monto REAL NOT NULL,
     referencia TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (venta_id) REFERENCES ventas(id) ON DELETE CASCADE
 );
 

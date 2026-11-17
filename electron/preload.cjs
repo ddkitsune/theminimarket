@@ -41,5 +41,15 @@ contextBridge.exposeInMainWorld('api', {
   backupDatabase: (folder) => ipcRenderer.invoke('pos:backup-database', folder),
 
   // Reportes (Pantalla 10)
-  getSalesReport: () => ipcRenderer.invoke('pos:get-sales-report')
+  getSalesReport: () => ipcRenderer.invoke('pos:get-sales-report'),
+
+  // Importar / Exportar Excel
+  exportProducts: () => ipcRenderer.invoke('pos:export-products'),
+  importProducts: (productsList) => ipcRenderer.invoke('pos:import-products', productsList),
+
+  // Usuarios y Empleados
+  getUsers: () => ipcRenderer.invoke('pos:get-users'),
+  saveUser: (user) => ipcRenderer.invoke('pos:save-user', user),
+  deleteUser: (id) => ipcRenderer.invoke('pos:delete-user', id),
+  loginUser: (term) => ipcRenderer.invoke('pos:login-user', term)
 });
